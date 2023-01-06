@@ -35,7 +35,12 @@ public abstract class AbstractKeys<K extends RoutableKey, KS extends Routables<K
         return Arrays.equals(keys, that.keys);
     }
 
-    public final int indexOf(K key)
+    public int indexOf(K key)
+    {
+        return Arrays.binarySearch(keys, key);
+    }
+
+    public int indexOf(RoutingKey key)
     {
         return Arrays.binarySearch(keys, key);
     }

@@ -55,7 +55,7 @@ public class PartialKeyRoute extends KeyRoute implements PartialRoute<RoutingKey
     }
 
     @Override
-    public AbstractRoutableKeys<?> with(RoutingKey withKey)
+    public AbstractUnseekableKeys<?> with(RoutingKey withKey)
     {
         if (contains(withKey))
             return this;

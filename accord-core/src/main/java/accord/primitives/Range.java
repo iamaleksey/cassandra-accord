@@ -18,6 +18,7 @@
 
 package accord.primitives;
 
+import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
@@ -67,6 +68,12 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         {
             return new EndInclusive(start, end);
         }
+
+        @Override
+        public String toString()
+        {
+            return "Range(" + start() + ", " + end() + ']';
+        }
     }
 
     public static class StartInclusive extends Range
@@ -102,6 +109,12 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         public Range subRange(RoutingKey start, RoutingKey end)
         {
             return new StartInclusive(start, end);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "Range[" + start() + ", " + end() + ')';
         }
     }
 
@@ -186,6 +199,18 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     public abstract Range subRange(RoutingKey start, RoutingKey end);
 
     @Override
+    public Key asKey()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Range asRange()
+    {
+        return this;
+    }
+
+    @Override
     public boolean equals(Object o)
     {
         if (this == o) return true;
@@ -198,12 +223,6 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     public int hashCode()
     {
         return start.hashCode() * 31 + end.hashCode();
-    }
-
-    @Override
-    public String toString()
-    {
-        return "Range[" + start + ", " + end + ']';
     }
 
     /**
@@ -230,6 +249,18 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         if (this.end.compareTo(that.start) <= 0)
             return -1;
         return 0;
+    }
+
+    /**
+     * Sorts by start then end
+     */
+    public int compare(Range that)
+    {
+        if (that.getClass() != this.getClass())
+            throw new IllegalArgumentException("Cannot mix KeyRange of different types");
+        int c = this.start.compareTo(that.start);
+        if (c == 0) c = this.end.compareTo(that.end);
+        return c;
     }
 
     public boolean contains(Range that)
@@ -297,7 +328,7 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     }
 
     @Override
-    public Unseekable toUnseekable()
+    public Range toUnseekable()
     {
         return this;
     }

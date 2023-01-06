@@ -220,14 +220,13 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     {
         TestKind testKind = kindOfTxn.isWrite() ? RorWs : Ws;
         commandStore.forEach(keys, ranges, forKey -> {
-            builder.nextKey(forKey.key());
             forKey.uncommitted().before(executeAt, testKind, ANY_DEPS, null, ANY_STATUS, null)
                     .forEach(info -> {
-                        if (!info.txnId.equals(txnId)) builder.add(info.txnId);
+                        if (!info.txnId.equals(txnId)) builder.add(forKey.key(), info.txnId);
                     });
             forKey.committedByExecuteAt().before(executeAt, testKind, ANY_DEPS, null, ANY_STATUS, null)
                     .forEach(id -> {
-                        if (!id.equals(txnId)) builder.add(id);
+                        if (!id.equals(txnId)) builder.add(forKey.key(), id);
                     });
         });
 

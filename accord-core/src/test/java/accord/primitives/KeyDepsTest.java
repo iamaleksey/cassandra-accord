@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package accord.txn;
+package accord.primitives;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,14 +32,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 import accord.impl.IntHashKey.Hash;
 import accord.primitives.*;
-import accord.primitives.Deps.OrderedBuilder;
+import accord.primitives.KeyDeps.OrderedBuilder;
 import accord.utils.Gen;
 import accord.utils.Gens;
+import accord.utils.RelationMultiMap.Entry;
 import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -50,7 +52,6 @@ import org.slf4j.LoggerFactory;
 import accord.api.Key;
 import accord.impl.IntHashKey;
 import accord.local.Node.Id;
-import accord.primitives.Deps.Entry;
 
 import static accord.utils.Gens.lists;
 import static accord.utils.Property.qt;
@@ -58,9 +59,9 @@ import static accord.utils.Utils.toArray;
 
 // TODO (expected, testing): test Keys with no contents, "without", "with" where TxnId and Keys are the same, but Key -> [TxnId] does not match;
 //  ensure high code coverage
-public class DepsTest
+public class KeyDepsTest
 {
-    private static final Logger logger = LoggerFactory.getLogger(DepsTest.class);
+    private static final Logger logger = LoggerFactory.getLogger(KeyDepsTest.class);
 
     @Test
     public void testRandom()
@@ -87,7 +88,7 @@ public class DepsTest
         List<Deps> deps = new ArrayList<>(count);
         while (count-- > 0)
             deps.add(supplier.get());
-        testOneDeps(random, DepsTest.Deps.merge(deps), 200);
+        testOneDeps(random, KeyDepsTest.Deps.merge(deps), 200);
     }
 
     @Test
@@ -118,12 +119,12 @@ public class DepsTest
             // no matches
             Assertions.assertSame(deps.test, deps.test.without(ignore -> false));
             // all match
-            Assertions.assertSame(accord.primitives.Deps.NONE, deps.test.without(ignore -> true));
+            Assertions.assertSame(accord.primitives.KeyDeps.NONE, deps.test.without(ignore -> true));
 
             // remove specific TxnId
             for (TxnId txnId : deps.test.txnIds())
             {
-                accord.primitives.Deps without = deps.test.without(i -> i.equals(txnId));
+                accord.primitives.KeyDeps without = deps.test.without(i -> i.equals(txnId));
                 // Was the TxnId removed?
                 List<TxnId> expectedTxnId = new ArrayList<>(deps.test.txnIds());
                 expectedTxnId.remove(txnId);
@@ -150,7 +151,7 @@ public class DepsTest
         });
     }
 
-    private static List<TxnId> get(accord.primitives.Deps deps, Key key)
+    private static List<TxnId> get(accord.primitives.KeyDeps deps, Key key)
     {
         List<TxnId> ids = new ArrayList<>();
         deps.forEach(key, ids::add);
@@ -161,7 +162,7 @@ public class DepsTest
     public void testIterator()
     {
         qt().forAll(Deps::generate).check(deps -> {
-            try (OrderedBuilder builder = accord.primitives.Deps.orderedBuilder(true))
+            try (OrderedBuilder builder = accord.primitives.KeyDeps.orderedBuilder(true))
             {
                 for (Map.Entry<Key, TxnId> e : deps.test)
                     builder.add(e.getKey(), e.getValue());
@@ -181,7 +182,7 @@ public class DepsTest
                 throw new AssertionError(start + " == " + end);
 
             TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachOn(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), false, true)), txnId -> {
+            deps.test.forEachUniqueTxnId(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), false, true)), txnId -> {
                 if (!seen.add(txnId))
                     throw new AssertionError("Seen " + txnId + " multiple times");
             });
@@ -205,7 +206,7 @@ public class DepsTest
             Key end = keys.get(keys.size() - 1);
 
             TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachOn(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), true, false)), txnId -> {
+            deps.test.forEachUniqueTxnId(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), true, false)), txnId -> {
                 if (!seen.add(txnId))
                     throw new AssertionError("Seen " + txnId + " multiple times");
             });
@@ -229,7 +230,7 @@ public class DepsTest
             Key end = keys.get(0);
 
             TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachOn(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), true, false)), txnId -> {
+            deps.test.forEachUniqueTxnId(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), true, false)), txnId -> {
                 if (!seen.add(txnId))
                     throw new AssertionError("Seen " + txnId + " multiple times");
             });
@@ -240,14 +241,14 @@ public class DepsTest
     @Test
     public void testMergeFull()
     {
-        qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(DepsTest::testMergedProperty);
+        qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(KeyDepsTest::testMergedProperty);
     }
 
     @Test
     public void testMergeFullConcurrent()
     {
         // pure=false due to shared buffer pool
-        Runnable test = () -> qt().withPure(false).forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(DepsTest::testMergedProperty);
+        Runnable test = () -> qt().withPure(false).forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(KeyDepsTest::testMergedProperty);
         int numThreads = Runtime.getRuntime().availableProcessors() * 4;
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
         List<Future<?>> futures = new ArrayList<>(numThreads);
@@ -276,33 +277,35 @@ public class DepsTest
         expected.testSimpleEquality();
 
         // slightly redundant due to Deps.merge using this method... it is here for completeness
-        Assertions.assertEquals(expected.test, accord.primitives.Deps.merge(list, a -> a.test));
-        Assertions.assertEquals(expected.test, list.stream().map(a -> a.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with));
+        Assertions.assertEquals(expected.test, accord.primitives.KeyDeps.merge(list, a -> a.test, Function.identity()));
+        Assertions.assertEquals(expected.test, list.stream().map(a -> a.test).reduce(accord.primitives.KeyDeps.NONE, accord.primitives.KeyDeps::with));
     }
 
     @Test
     public void orderedBuilder()
     {
         qt().forAll(Deps::generate, Gens.random()).check((deps, random) -> {
-            OrderedBuilder builder = accord.primitives.Deps.orderedBuilder(false);
-            for (Key key : deps.canonical.keySet())
+            try (OrderedBuilder builder = accord.primitives.KeyDeps.orderedBuilder(false);)
             {
-                builder.nextKey(key);
-                List<TxnId> ids = new ArrayList<>(deps.canonical.get(key));
-                Collections.shuffle(ids, random);
-                ids.forEach(builder::add);
-            }
+                for (Key key : deps.canonical.keySet())
+                {
+                    builder.nextKey(key);
+                    List<TxnId> ids = new ArrayList<>(deps.canonical.get(key));
+                    Collections.shuffle(ids, random);
+                    ids.forEach(builder::add);
+                }
 
-            Assertions.assertEquals(deps.test, builder.build());
+                Assertions.assertEquals(deps.test, builder.build());
+            }
         });
     }
 
     static class Deps
     {
         final Map<Key, Set<TxnId>> canonical;
-        final accord.primitives.Deps test;
+        final accord.primitives.KeyDeps test;
 
-        Deps(Map<Key, Set<TxnId>> canonical, accord.primitives.Deps test)
+        Deps(Map<Key, Set<TxnId>> canonical, accord.primitives.KeyDeps test)
         {
             this.canonical = canonical;
             this.test = test;
@@ -355,14 +358,14 @@ public class DepsTest
                 canonical.computeIfAbsent(key, ignore -> new TreeSet<>()).add(txnId);
             }
 
-            try (OrderedBuilder builder = accord.primitives.Deps.orderedBuilder(false))
+            try (OrderedBuilder builder = accord.primitives.KeyDeps.orderedBuilder(false))
             {
                 canonical.forEach((key, ids) -> {
                     builder.nextKey(key);
                     ids.forEach(builder::add);
                 });
 
-                accord.primitives.Deps test = builder.build();
+                accord.primitives.KeyDeps test = builder.build();
                 return new Deps(canonical, test);
             }
         }
@@ -421,7 +424,7 @@ public class DepsTest
                 builder.append(e.getValue());
             }
             builder.append("}");
-            Assertions.assertEquals(builder.toString(), test.toSimpleString());
+            Assertions.assertEquals(builder.toString(), test.toString());
         }
 
         TreeMap<TxnId, List<Key>> invertCanonical()
@@ -445,7 +448,7 @@ public class DepsTest
                     canonical.computeIfAbsent(e.getKey(), ignore -> new TreeSet<>()).addAll(e.getValue());
             }
 
-            return new Deps(canonical, accord.primitives.Deps.merge(deps, d -> d.test));
+            return new Deps(canonical, accord.primitives.KeyDeps.merge(deps, d -> d.test, Function.identity()));
         }
     }
 
@@ -474,7 +477,7 @@ public class DepsTest
         Random random = random(seed);
         int totalCount = 1 + random.nextInt(totalCountRange - 1);
         testOneDeps(random,
-                    DepsTest.Deps.generate(random, uniqueTxnIds, epochRange, hlcRange, 0, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount),
+                    KeyDepsTest.Deps.generate(random, uniqueTxnIds, epochRange, hlcRange, 0, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount),
                     keyRange);
     }
 
@@ -483,13 +486,13 @@ public class DepsTest
     {
         return () -> {
             if (random.nextInt(100) == 0)
-                return new Deps(new TreeMap<>(), accord.primitives.Deps.NONE);
+                return new Deps(new TreeMap<>(), accord.primitives.KeyDeps.NONE);
 
             int uniqueTxnIds = 1 + random.nextInt(uniqueTxnIdsRange - 1);
             int uniqueKeys = 1 + random.nextInt(uniqueKeysRange - 1);
             int emptyKeys = 1 + random.nextInt(emptyKeysRange - 1);
             int totalCount = random.nextInt(Math.min(totalCountRange, uniqueKeys * uniqueTxnIds));
-            return DepsTest.Deps.generate(random, uniqueTxnIds,
+            return KeyDepsTest.Deps.generate(random, uniqueTxnIds,
                                                   epochRange, hlcRange, flagRange, nodeRange,
                                                   uniqueKeys, emptyKeys, keyRange, totalCount);
         };
@@ -506,19 +509,19 @@ public class DepsTest
                 Ranges ranges = randomKeyRanges(random, 1 + random.nextInt(5), keyRange);
 
                 {   // test forEach(key, txnId)
-                    List<Entry> canonical = new ArrayList<>();
+                    List<Entry<Key, TxnId>> canonical = new ArrayList<>();
                     for (Key key : deps.canonical.keySet())
                     {
                         if (ranges.contains(key))
-                            deps.canonical.get(key).forEach(txnId -> canonical.add(new Entry(key, txnId)));
+                            deps.canonical.get(key).forEach(txnId -> canonical.add(new Entry<>(key, txnId)));
                     }
-                    deps.test.forEachOn(ranges, ignore -> true, new BiConsumer<Key, TxnId>()
+                    deps.test.forEach(ranges, new BiConsumer<>()
                     {
                         int i = 0;
                         @Override
                         public void accept(Key key, TxnId txnId)
                         {
-                            Entry entry = canonical.get(i);
+                            Entry<Key, TxnId> entry = canonical.get(i);
                             Assertions.assertEquals(entry.getKey(), key);
                             Assertions.assertEquals(entry.getValue(), txnId);
                             ++i;
@@ -534,7 +537,7 @@ public class DepsTest
                         if (ranges.contains(key))
                             canonical.addAll(deps.canonical.get(key));
                     }
-                    deps.test.forEachOn(ranges, test::add);
+                    deps.test.forEachUniqueTxnId(ranges, test::add);
                     test.sort(Timestamp::compareTo);
                     Assertions.assertEquals(new ArrayList<>(canonical), test);
                 }
