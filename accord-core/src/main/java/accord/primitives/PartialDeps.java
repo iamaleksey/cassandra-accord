@@ -2,22 +2,19 @@ package accord.primitives;
 
 import accord.utils.Invariants;
 
-import javax.annotation.Nullable;
-
 public class PartialDeps extends Deps
 {
     public static final PartialDeps NONE = new PartialDeps(Ranges.EMPTY, KeyDeps.NONE, RangeDeps.NONE);
 
-    public static OrderedBuilder orderedBuilder(Ranges covering, boolean hasOrderedTxnId)
+    public static Builder builder(Ranges covering)
     {
-        return new OrderedBuilder(covering, hasOrderedTxnId);
+        return new Builder(covering);
     }
-    public static class OrderedBuilder extends AbstractOrderedBuilder<PartialDeps>
+    public static class Builder extends AbstractBuilder<PartialDeps>
     {
         final Ranges covering;
-        public OrderedBuilder(Ranges covering, boolean hasOrderedTxnId)
+        public Builder(Ranges covering)
         {
-            super(hasOrderedTxnId);
             this.covering = covering;
         }
 

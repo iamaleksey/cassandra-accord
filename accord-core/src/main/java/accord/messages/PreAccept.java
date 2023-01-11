@@ -210,13 +210,13 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 
     static PartialDeps calculatePartialDeps(SafeCommandStore commandStore, TxnId txnId, Seekables<?, ?> keys, Txn.Kind kindOfTxn, Timestamp executeAt, Ranges ranges)
     {
-        try (PartialDeps.OrderedBuilder builder = PartialDeps.orderedBuilder(ranges, false))
+        try (PartialDeps.Builder builder = PartialDeps.builder(ranges))
         {
             return calculateDeps(commandStore, txnId, keys, kindOfTxn, executeAt, ranges, builder);
         }
     }
 
-    private static <T extends Deps> T calculateDeps(SafeCommandStore commandStore, TxnId txnId, Seekables<?, ?> keys, Txn.Kind kindOfTxn, Timestamp executeAt, Ranges ranges, Deps.AbstractOrderedBuilder<T> builder)
+    private static <T extends Deps> T calculateDeps(SafeCommandStore commandStore, TxnId txnId, Seekables<?, ?> keys, Txn.Kind kindOfTxn, Timestamp executeAt, Ranges ranges, Deps.AbstractBuilder<T> builder)
     {
         TestKind testKind = kindOfTxn.isWrite() ? RorWs : Ws;
         commandStore.forEach(keys, ranges, forKey -> {

@@ -18,14 +18,7 @@
 
 package accord.primitives;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,8 +30,7 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 import accord.impl.IntHashKey.Hash;
-import accord.primitives.*;
-import accord.primitives.KeyDeps.OrderedBuilder;
+import accord.primitives.KeyDeps.Builder;
 import accord.utils.Gen;
 import accord.utils.Gens;
 import accord.utils.RelationMultiMap.Entry;
@@ -162,7 +154,7 @@ public class KeyDepsTest
     public void testIterator()
     {
         qt().forAll(Deps::generate).check(deps -> {
-            try (OrderedBuilder builder = accord.primitives.KeyDeps.orderedBuilder(true))
+            try (Builder builder = accord.primitives.KeyDeps.builder())
             {
                 for (Map.Entry<Key, TxnId> e : deps.test)
                     builder.add(e.getKey(), e.getValue());
@@ -282,10 +274,10 @@ public class KeyDepsTest
     }
 
     @Test
-    public void orderedBuilder()
+    public void builder()
     {
         qt().forAll(Deps::generate, Gens.random()).check((deps, random) -> {
-            try (OrderedBuilder builder = accord.primitives.KeyDeps.orderedBuilder(false);)
+            try (Builder builder = accord.primitives.KeyDeps.builder();)
             {
                 for (Key key : deps.canonical.keySet())
                 {
@@ -302,10 +294,10 @@ public class KeyDepsTest
 
     static class Deps
     {
-        final Map<Key, Set<TxnId>> canonical;
+        final Map<Key, NavigableSet<TxnId>> canonical;
         final accord.primitives.KeyDeps test;
 
-        Deps(Map<Key, Set<TxnId>> canonical, accord.primitives.KeyDeps test)
+        Deps(Map<Key, NavigableSet<TxnId>> canonical, accord.primitives.KeyDeps test)
         {
             this.canonical = canonical;
             this.test = test;
@@ -350,7 +342,7 @@ public class KeyDepsTest
                 txnIds = new ArrayList<>(tmp);
             }
 
-            Map<Key, Set<TxnId>> canonical = new TreeMap<>();
+            TreeMap<Key, NavigableSet<TxnId>> canonical = new TreeMap<>();
             for (int i = 0 ; i < totalCount ; ++i)
             {
                 Key key = populateKeys.get(random.nextInt(uniqueKeys));
@@ -358,11 +350,13 @@ public class KeyDepsTest
                 canonical.computeIfAbsent(key, ignore -> new TreeSet<>()).add(txnId);
             }
 
-            try (OrderedBuilder builder = accord.primitives.KeyDeps.orderedBuilder(false))
+            boolean inOrderKeys = random.nextBoolean();
+            boolean inOrderValues = random.nextBoolean();
+            try (Builder builder = accord.primitives.KeyDeps.builder())
             {
-                canonical.forEach((key, ids) -> {
+                (inOrderKeys ? canonical : canonical.descendingMap()).forEach((key, ids) -> {
                     builder.nextKey(key);
-                    ids.forEach(builder::add);
+                    (inOrderValues ? ids : ids.descendingSet()).forEach(builder::add);
                 });
 
                 accord.primitives.KeyDeps test = builder.build();
@@ -372,8 +366,8 @@ public class KeyDepsTest
 
         Deps select(Ranges ranges)
         {
-            Map<Key, Set<TxnId>> canonical = new TreeMap<>();
-            for (Map.Entry<Key, Set<TxnId>> e : this.canonical.entrySet())
+            Map<Key, NavigableSet<TxnId>> canonical = new TreeMap<>();
+            for (Map.Entry<Key, NavigableSet<TxnId>> e : this.canonical.entrySet())
             {
                 if (ranges.contains(e.getKey()))
                     canonical.put(e.getKey(), e.getValue());
@@ -384,10 +378,10 @@ public class KeyDepsTest
 
         Deps with(Deps that)
         {
-            Map<Key, Set<TxnId>> canonical = new TreeMap<>();
-            for (Map.Entry<Key, Set<TxnId>> e : this.canonical.entrySet())
+            Map<Key, NavigableSet<TxnId>> canonical = new TreeMap<>();
+            for (Map.Entry<Key, NavigableSet<TxnId>> e : this.canonical.entrySet())
                 canonical.computeIfAbsent(e.getKey(), ignore -> new TreeSet<>()).addAll(e.getValue());
-            for (Map.Entry<Key, Set<TxnId>> e : that.canonical.entrySet())
+            for (Map.Entry<Key, NavigableSet<TxnId>> e : that.canonical.entrySet())
                 canonical.computeIfAbsent(e.getKey(), ignore -> new TreeSet<>()).addAll(e.getValue());
 
             return new Deps(canonical, test.with(that.test));
@@ -396,7 +390,7 @@ public class KeyDepsTest
         void testSimpleEquality()
         {
             Assertions.assertArrayEquals(canonical.keySet().toArray(new Key[0]), ((Keys)test.keys()).stream().toArray(Key[]::new));
-            for (Map.Entry<Key, Set<TxnId>> e : canonical.entrySet())
+            for (Map.Entry<Key, NavigableSet<TxnId>> e : canonical.entrySet())
             {
                 List<TxnId> canonical = new ArrayList<>(e.getValue());
                 List<TxnId> test = new ArrayList<>();
@@ -415,7 +409,7 @@ public class KeyDepsTest
 
             StringBuilder builder = new StringBuilder();
             builder.append("{");
-            for (Map.Entry<Key, Set<TxnId>> e : canonical.entrySet())
+            for (Map.Entry<Key, NavigableSet<TxnId>> e : canonical.entrySet())
             {
                 if (builder.length() > 1)
                     builder.append(", ");
@@ -430,7 +424,7 @@ public class KeyDepsTest
         TreeMap<TxnId, List<Key>> invertCanonical()
         {
             TreeMap<TxnId, List<Key>> result = new TreeMap<>();
-            for (Map.Entry<Key, Set<TxnId>> e : canonical.entrySet())
+            for (Map.Entry<Key, NavigableSet<TxnId>> e : canonical.entrySet())
             {
                 e.getValue().forEach(txnId -> result.computeIfAbsent(txnId, ignore -> new ArrayList<>())
                                                     .add(e.getKey()));
@@ -441,10 +435,10 @@ public class KeyDepsTest
 
         static Deps merge(List<Deps> deps)
         {
-            Map<Key, Set<TxnId>> canonical = new TreeMap<>();
+            Map<Key, NavigableSet<TxnId>> canonical = new TreeMap<>();
             for (Deps that : deps)
             {
-                for (Map.Entry<Key, Set<TxnId>> e : that.canonical.entrySet())
+                for (Map.Entry<Key, NavigableSet<TxnId>> e : that.canonical.entrySet())
                     canonical.computeIfAbsent(e.getKey(), ignore -> new TreeSet<>()).addAll(e.getValue());
             }
 

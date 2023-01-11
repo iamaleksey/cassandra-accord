@@ -339,7 +339,7 @@ public class Json
         public Deps read(JsonReader in) throws IOException
         {
             KeyDeps keyDeps;
-            try (KeyDeps.OrderedBuilder builder = KeyDeps.orderedBuilder(true))
+            try (KeyDeps.Builder builder = KeyDeps.builder())
             {
                 in.beginArray();
                 while (in.hasNext())
@@ -354,7 +354,7 @@ public class Json
                 keyDeps = builder.build();
             }
             RangeDeps rangeDeps;
-            try (RangeDeps.OrderedBuilder builder = RangeDeps.orderedBuilder(true))
+            try (RangeDeps.Builder builder = RangeDeps.builder())
             {
                 in.beginArray();
                 while (in.hasNext())

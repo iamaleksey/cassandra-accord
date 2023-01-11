@@ -21,7 +21,6 @@ package accord.primitives;
 import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers;
-import accord.utils.RelationMultiMap;
 import accord.utils.SymmetricComparator;
 
 import java.util.*;
@@ -73,24 +72,16 @@ public class KeyDeps implements Iterable<Map.Entry<Key, TxnId>>
     /**
      * Expects Command to be provided in TxnId order
      */
-    public static OrderedBuilder orderedBuilder(boolean hasOrderedTxnId)
+    public static Builder builder()
     {
-        return new OrderedBuilder(hasOrderedTxnId);
+        return new Builder();
     }
 
-    public static abstract class AbstractOrderedBuilder<T extends KeyDeps> extends RelationMultiMap.AbstractOrderedBuilder<Key, TxnId, T>
+    public static class Builder extends AbstractBuilder<Key, TxnId, KeyDeps>
     {
-        protected AbstractOrderedBuilder(Adapter<Key, TxnId> adapter, boolean hasOrderedTxnId)
+        public Builder()
         {
-            super(adapter, hasOrderedTxnId);
-        }
-    }
-
-    public static class OrderedBuilder extends AbstractOrderedBuilder<KeyDeps>
-    {
-        public OrderedBuilder(boolean hasOrderedTxnId)
-        {
-            super(ADAPTER, hasOrderedTxnId);
+            super(ADAPTER);
         }
 
         @Override

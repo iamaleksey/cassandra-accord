@@ -2,7 +2,7 @@ package accord.primitives;
 
 import accord.api.Key;
 import accord.utils.*;
-import accord.utils.RelationMultiMap.AbstractOrderedBuilder;
+import accord.utils.RelationMultiMap.AbstractBuilder;
 import accord.utils.RelationMultiMap.Adapter;
 import net.nicoulaj.compilecommand.annotations.DontInline;
 import net.nicoulaj.compilecommand.annotations.Inline;
@@ -543,7 +543,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         if (txnIdRanges.isEmpty())
             return NONE;
 
-        try (OrderedBuilderByTxnId builder = new OrderedBuilderByTxnId(true))
+        try (BuilderByTxnId builder = new BuilderByTxnId(true))
         {
             for (Map.Entry<TxnId, Ranges> e : txnIdRanges.entrySet())
             {
@@ -556,16 +556,16 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         }
     }
 
-    public static OrderedBuilder orderedBuilder(boolean hasOrderedTxnId)
+    public static Builder builder()
     {
-        return new OrderedBuilder(hasOrderedTxnId);
+        return new Builder();
     }
 
-    public static class OrderedBuilder extends AbstractOrderedBuilder<Range, TxnId, RangeDeps>
+    public static class Builder extends AbstractBuilder<Range, TxnId, RangeDeps>
     {
-        public OrderedBuilder(boolean hasOrderedTxnId)
+        public Builder()
         {
-            super(ADAPTER, hasOrderedTxnId);
+            super(ADAPTER);
         }
 
         @Override
@@ -581,16 +581,16 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         }
     }
 
-    public static OrderedBuilderByTxnId orderedByTxnIdBuilder(boolean hasOrderedRanges)
+    public static BuilderByTxnId byTxnIdBuilder(boolean hasOrderedRanges)
     {
-        return new OrderedBuilderByTxnId(hasOrderedRanges);
+        return new BuilderByTxnId(hasOrderedRanges);
     }
 
-    public static class OrderedBuilderByTxnId extends AbstractOrderedBuilder<TxnId, Range, RangeDeps>
+    public static class BuilderByTxnId extends AbstractBuilder<TxnId, Range, RangeDeps>
     {
-        public OrderedBuilderByTxnId(boolean hasOrderedTxnId)
+        public BuilderByTxnId(boolean hasOrderedTxnId)
         {
-            super(REVERSE_ADAPTER, hasOrderedTxnId);
+            super(REVERSE_ADAPTER);
         }
 
         @Override

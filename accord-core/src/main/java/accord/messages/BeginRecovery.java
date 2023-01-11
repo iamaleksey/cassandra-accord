@@ -297,7 +297,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
 
     private static Deps acceptedStartedBeforeWithoutWitnessing(SafeCommandStore commandStore, TxnId txnId, Ranges ranges, Seekables<?, ?> keys)
     {
-        try (Deps.OrderedBuilder builder = Deps.orderedBuilder(true))
+        try (Deps.Builder builder = Deps.builder())
         {
             commandStore.forEach(keys, ranges, forKey -> {
                 // accepted txns with an earlier txnid that do not have our txnid as a dependency
@@ -323,7 +323,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
 
     private static Deps committedStartedBeforeAndWitnessed(SafeCommandStore commandStore, TxnId txnId, Ranges ranges, Seekables<?, ?> keys)
     {
-        try (Deps.OrderedBuilder builder = Deps.orderedBuilder(true))
+        try (Deps.Builder builder = Deps.builder())
         {
             commandStore.forEach(keys, ranges, forKey -> {
                 /*

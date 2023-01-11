@@ -35,25 +35,23 @@ public class Deps
 {
     public static final Deps NONE = new Deps(KeyDeps.NONE, RangeDeps.NONE);
 
-    public static OrderedBuilder orderedBuilder(boolean hasOrderedTxnId)
+    public static Builder builder()
     {
-        return new OrderedBuilder(hasOrderedTxnId);
+        return new Builder();
     }
 
     // TODO (expected, efficiency): cache this object per thread
-    public static abstract class AbstractOrderedBuilder<T extends Deps> implements AutoCloseable
+    public static abstract class AbstractBuilder<T extends Deps> implements AutoCloseable
     {
-        final boolean hasOrderedTxnId;
-        final KeyDeps.OrderedBuilder keyBuilder;
-        RangeDeps.OrderedBuilder rangeBuilder;
+        final KeyDeps.Builder keyBuilder;
+        RangeDeps.Builder rangeBuilder;
 
-        AbstractOrderedBuilder(boolean hasOrderedTxnId)
+        AbstractBuilder()
         {
-            this.hasOrderedTxnId = hasOrderedTxnId;
-            this.keyBuilder = KeyDeps.orderedBuilder(hasOrderedTxnId);
+            this.keyBuilder = KeyDeps.builder();
         }
 
-        public AbstractOrderedBuilder<T> add(Seekable keyOrRange, TxnId txnId)
+        public AbstractBuilder<T> add(Seekable keyOrRange, TxnId txnId)
         {
             switch (keyOrRange.domain())
             {
@@ -63,7 +61,7 @@ public class Deps
                     break;
                 case Range:
                     if (rangeBuilder == null)
-                        rangeBuilder = RangeDeps.orderedBuilder(hasOrderedTxnId);
+                        rangeBuilder = RangeDeps.builder();
                     rangeBuilder.add(keyOrRange.asRange(), txnId);
                     break;
             }
@@ -81,11 +79,11 @@ public class Deps
         }
     }
 
-    public static class OrderedBuilder extends AbstractOrderedBuilder<Deps>
+    public static class Builder extends AbstractBuilder<Deps>
     {
-        public OrderedBuilder(boolean hasOrderedTxnId)
+        public Builder()
         {
-            super(hasOrderedTxnId);
+            super();
         }
 
         public Deps build()

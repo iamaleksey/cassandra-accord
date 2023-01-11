@@ -79,14 +79,13 @@ public class RelationMultiMap
 
 
     // TODO (expected, efficiency): cache this object per thread
-    public static abstract class AbstractOrderedBuilder<K, V, T> implements AutoCloseable
+    public static abstract class AbstractBuilder<K, V, T> implements AutoCloseable
     {
         final Adapter<K, V> adapter;
         final ObjectBuffers<K> cachedKeys;
         final ObjectBuffers<V> cachedValues;
         final IntBuffers cachedInts = cachedInts();
 
-        final boolean hasOrderedValues;
         K[] keys;
         int[] keyLimits;
         // txnId -> Offset
@@ -94,15 +93,16 @@ public class RelationMultiMap
         int keyCount;
         int keyOffset;
         int totalCount;
+        boolean hasOrderedKeys = true;
+        boolean hasOrderedValues = true;
 
-        public AbstractOrderedBuilder(Adapter<K, V> adapter, boolean hasOrderedTxnId)
+        public AbstractBuilder(Adapter<K, V> adapter)
         {
             this.adapter = adapter;
             this.cachedKeys = adapter.cachedKeys();
             this.cachedValues = adapter.cachedValues();
             this.keys = cachedKeys.get(16);
             this.keyLimits = cachedInts.getInts(keys.length);
-            this.hasOrderedValues = hasOrderedTxnId;
             this.keysToValues = cachedValues.get(16);
         }
 
@@ -119,10 +119,7 @@ public class RelationMultiMap
         public void nextKey(K key)
         {
             if (keyCount > 0 && adapter.keyComparator().compare(keys[keyCount - 1], key) >= 0)
-            {
-                throw new IllegalArgumentException("Key " + key + " has already been visited or was provided out of order ("
-                        + Arrays.toString(Arrays.copyOf(keys, keyCount)) + ")");
-            }
+                hasOrderedKeys = false;
 
             finishKey();
 
@@ -138,17 +135,21 @@ public class RelationMultiMap
                 keyLimits = newKeyLimits;
             }
             keys[keyCount++] = key;
+            hasOrderedValues = true;
         }
 
         private void finishKey()
         {
             if (totalCount == keyOffset && keyCount > 0)
+            {
                 --keyCount; // remove this key; no data
+                return;
+            }
 
             if (keyCount == 0)
                 return;
 
-            if (totalCount != keyOffset && !hasOrderedValues)
+            if (!hasOrderedValues)
             {
                 // TODO (low priority, efficiency): this allocates a significant amount of memory: would be preferable to be able to sort using a pre-defined scratch buffer
                 Arrays.sort(keysToValues, keyOffset, totalCount);
@@ -176,7 +177,7 @@ public class RelationMultiMap
         public void add(V value)
         {
             if (hasOrderedValues && totalCount > keyOffset && adapter.valueComparator().compare(keysToValues[totalCount - 1], value) >= 0)
-                throw new IllegalArgumentException("TxnId provided out of order");
+                hasOrderedValues = false;
 
             if (totalCount >= keysToValues.length)
             {
@@ -209,20 +210,45 @@ public class RelationMultiMap
             V[] values = cachedValues.complete(uniqueValues, valueCount);
             cachedValues.discard(uniqueValues, totalCount);
 
+            int[] sortedKeyIndexes;
+            K[] sortedKeys;
+            if (hasOrderedKeys)
+            {
+                sortedKeyIndexes = null;
+                sortedKeys = cachedKeys.completeAndDiscard(keys, keyCount);
+            }
+            else
+            {
+                sortedKeyIndexes = new int[keyCount];
+                sortedKeys = Arrays.copyOf(keys, keyCount);
+                Arrays.sort(sortedKeys);
+
+                for (int i = 1 ; i < keyCount ; ++i)
+                {
+                    if (sortedKeys[i-1].equals(sortedKeys[i]))
+                        throw new IllegalArgumentException("Key " + sortedKeys[i] + " has been visited more than once ("
+                                + Arrays.toString(Arrays.copyOf(keys, keyCount)) + ")");
+                }
+                for (int i = 0 ; i < keyCount ; ++i)
+                    sortedKeyIndexes[Arrays.binarySearch(sortedKeys, keys[i])] = i;
+                cachedKeys.forceDiscard(keys, keyCount);
+            }
+
             int[] result = new int[keyCount + totalCount];
             int offset = keyCount;
-            for (int k = 0 ; k < keyCount ; ++k)
+            for (int ki = 0 ; ki < keyCount ; ++ki)
             {
-                result[k] = keyCount + keyLimits[k];
+                int k = sortedKeyIndexes == null ? ki : sortedKeyIndexes[ki];
                 int from = k == 0 ? 0 : keyLimits[k - 1];
                 int to = keyLimits[k];
                 offset = (int)SortedArrays.foldlIntersection(adapter.valueComparator(), values, 0, valueCount, keysToValues, from, to, (key, p, v, li, ri) -> {
                     result[(int)v] = li;
                     return v + 1;
-                }, keyCount, offset, -1);
+                }, 0, offset, -1);
+                result[ki] = offset;
             }
 
-            return build(cachedKeys.complete(keys, keyCount), values, result);
+            return build(sortedKeys, values, result);
         }
 
         protected abstract T none();
@@ -231,7 +257,6 @@ public class RelationMultiMap
         @Override
         public void close()
         {
-            cachedKeys.discard(keys, keyCount);
             cachedInts.forceDiscard(keyLimits);
             cachedValues.forceDiscard(keysToValues, totalCount);
         }
