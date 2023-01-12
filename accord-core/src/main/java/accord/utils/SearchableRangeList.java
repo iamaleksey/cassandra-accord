@@ -41,17 +41,20 @@ import static accord.utils.SortedArrays.Search.*;
  *   <ul>
  *     <li> We perform a greedy iteration of the ranges, with some initial {@code goalScanDistance}; any range that can be found
  *          from every overlapping range index by a backwards scan shorter than this will record only the actual distance required.
- *     <li> Other ranges are "tenured" and will trigger a checkpoint to be written either immediately (if the number of
- *          already tenured ranges is small enough), or else within the maximum scan distance from the first location
- *          the range was first encountered
- *     <li> The maximum scan distance is proportional to the larger of: the logarithm of the total number of ranges in the collection
+ *     <li> Other ranges are "tenured" and will trigger a checkpoint to be written either immediately (if the last checkpoint was
+ *          long ago enough), or else within the maximum scan distance from the first location the range was first encountered
+ *     <li> The maximum scan distance is proportional to the larger of: the logarithm of the total number of ranges in the collection,
  *          and the number of tenured ranges written to the last checkpoint, discounted by the number of ranges since removed.
- *          This guarantees our O(lg(N)+k) where k is the size of the result set for a query, while ensuring or O(N) space requirements.
+ *          This guarantees O(lg(N)+k) where k is the size of the result set for a query, while ensuring our O(N) space requirements.
  *          Essentially, we require that the distance between two checkpoints be at least as large as the number of duplicate
  *          elements we may serialize, so we can write at most O(N) duplicate entries, and we can write unique entries at most
  *          once, i.e. O(N) in total. Since we sort the checkpoints in descending order, we will never visit more than O(k)
- *          entries, where k is the number of matches; the number of entries we scan is not capped in this manner, but
- *          is proportional to the number of matches we will find.
+ *          entries, where k is the number of matches. The number of scanned entries is similarly capped by the same logic;
+ *          for each entry we remove from the tenured collection we bring our threshold for writing a new checkpoint down,
+ *          so that by the time we are permitted to write a checkpoint we must have fewer tenured entries than we may scan.
+ *          TODO (low priority, efficiency): probably we want to take the maximum of the current tenured.size() and the
+ *           discounted minimum span when deciding IF we want to write a new checkpoint, even if our complexity permits
+ *           writing solely based on the discounted minimum span.
  *    </ul>
  *    <li>We additionally permit our checkpoints to reference earlier checkpoints whose end bounds are still open.
  *        We permit this to a depth of at most one, i.e. we do not transitively explore checkpoints referenced by

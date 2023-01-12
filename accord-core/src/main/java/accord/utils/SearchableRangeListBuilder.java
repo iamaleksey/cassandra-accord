@@ -44,9 +44,17 @@ public class SearchableRangeListBuilder
         ACCURATE
     }
 
+    /**
+     * Should we maintain pointers to prior checkpoints that we may reference instead of reserializing
+     * the remaining contents. This is cheap to visit as we stop enumerating as soon as we encounter
+     * an entry that no longer covers us. We use some simple heuristics when deciding whether to do
+     * this, namely that there are at least two entries (so we save one checkpoint entry) and that
+     * there is at least one direct entry for each indirect/link entry in the range we will link.
+     */
     public enum Links
     {
-        LINKS, NO_LINKS
+        LINKS,
+        NO_LINKS
     }
 
     private static final int BIT31 = 0x80000000;
@@ -67,7 +75,9 @@ public class SearchableRangeListBuilder
     final TenuredSet tenured = new TenuredSet();
     final PendingCheckpoint pending = new PendingCheckpoint();
 
-    int maxScanAndCheckpointMatches; // the maximum number of entries we can match with both a scan + checkpoint lookup
+    // track the maximum possible number of entries we can match with both a scan + checkpoint lookup
+    // this is an over-estimate and may be used by consumers to allocate out-of-order buffers for visitations
+    int maxScanAndCheckpointMatches;
 
     public SearchableRangeListBuilder(Range[] ranges, Strategy strategy, Links links)
     {
@@ -81,22 +91,33 @@ public class SearchableRangeListBuilder
         Invariants.checkArgument(goalScanDistance <= MAX_SCAN_DISTANCE);
         Invariants.checkArgument(goalScanDistance > 0);
         this.ranges = ranges;
-        scan.init(goalScanDistance);
         init(ranges, goalScanDistance);
+    }
+
+    void init(Range[] ranges, int goalScanDistance)
+    {
+        // we write checkpoints at least goalScanDistance apart
+        scan.init(goalScanDistance);
+        IntBuffers cachedInts = cachedInts();
+        // ask for int buffers in descending order of size
+        this.lists = cachedInts.getInts(ranges.length); // this one might need to grow
+        // +2 to round-up each division, and +2 to account for the final entry (which might require an empty scan distance header)
+        this.headers = cachedInts.getInts(((ranges.length / goalScanDistance) * 5) / 4 + 4);
+        this.bounds = cachedInts.getInts(ranges.length / goalScanDistance + 1);
     }
 
     /**
      * Walk over each range, looking ahead by {@link #maxScanDistance} to decide if a range should
      * be tenured (written to a checkpoint) or scanned; the maximum scan distance is determined by the
-     * number of open tenured entries, i.e. the minimum number o results we can expect to be returned
+     * number of open tenured entries, i.e. the minimum number of results we can expect to be returned
      * (or, if greater, the logarithm of the number of ranges in the collection).
      * <p>
      * Once we encounter a range that should be tenured, either write a checkpoint immediately
      * or make a note of the position we must scan to from the last entry in this checkpoint
      * and wait until it is permitted to write a checkpoint. This range will be tenured either
      * way for the following checkpoint.
-     *
-     * <p>The only reason not to write a checkpoint immediately is in the case we would breach
+     * <p>
+     * The only reason not to write a checkpoint immediately is in the case we would breach
      * our linear space complexity limit, which is imposed by ensuring we have a space between
      * checkpoints at least as large as the number of entries written to the last checkpoint,
      * discounted by the number of entries we have removed from the tenured collection since
@@ -131,6 +152,9 @@ public class SearchableRangeListBuilder
     /**
      * Categorise the candidateIdx as either scannable, and if so update the scan distance;
      * or unscannable, in which case add it to the {@link #tenured} collection.
+     * Note, that in ACCURATE mode we tenure the item if it is outside of the goalScanDistance
+     * so we may track O(k) accurately above the O(lg2(N)) search and default scan distance,
+     * but we still update the scan distance so that the checkpoint will exclude this entry.
      */
     private void tenureOrScan(int index)
     {
@@ -254,7 +278,36 @@ public class SearchableRangeListBuilder
 
         scan.reset();
 
-        if (!isAccurate)
+        if (isAccurate)
+        {
+            // TODO (low priority, efficiency): we can shift back the existing scanDistance if it's far enough from
+            //  the next checkpoint. this might permit us to skip some comparisons
+            scan.resetPeakMax(tenured);
+            for (Tenured tenured : this.tenured)
+            {
+                int distanceToEnd = (tenured.lastIndex - checkpointIndex);
+                if (distanceToEnd >= scan.peakMax)
+                    break;
+
+                int scanDistance = tenured.lastIndex - tenured.index;
+                if (scanDistance <= scan.peakMax)
+                    scan.updateScanDistance(tenured.index, scanDistance, null);
+            }
+
+            if (scan.watermark() < scan.goal)
+            {
+                int ri = Scan.minScanIndex(checkpointIndex, scan.goal);
+                while (ri < checkpointIndex)
+                {
+                    RoutingKey end = ranges[ri].end();
+                    int scanLimit = scanLimit(ri, scan.peakMax);
+                    if (!shouldTenure(end, scanLimit))
+                        scan.update(end, ri, ranges, scanLimit, null);
+                    ++ri;
+                }
+            }
+        }
+        else
         {
             // the maximum scan distance that could ever have been adopted for last chunk
             int oldPeakMax = scan.peakMax();
@@ -293,35 +346,6 @@ public class SearchableRangeListBuilder
             }
 
             scan.resetPeakMax(tenured);
-        }
-        else
-        {
-            // TODO (low priority, efficiency): we can shift back the existing scanDistance if it's far enough from
-            //  the next checkpoint. this might permit us to skip some comparisons
-            scan.resetPeakMax(tenured);
-            for (Tenured tenured : this.tenured)
-            {
-                int distanceToEnd = (tenured.lastIndex - checkpointIndex);
-                if (distanceToEnd >= scan.peakMax)
-                    break;
-
-                int scanDistance = tenured.lastIndex - tenured.index;
-                if (scanDistance <= scan.peakMax)
-                    scan.updateScanDistance(tenured.index, scanDistance, null);
-            }
-
-            if (scan.watermark() < scan.goal)
-            {
-                int ri = Scan.minScanIndex(checkpointIndex, scan.goal);
-                while (ri < checkpointIndex)
-                {
-                    RoutingKey end = ranges[ri].end();
-                    int scanLimit = scanLimit(ri, scan.peakMax);
-                    if (!shouldTenure(end, scanLimit))
-                        scan.update(end, ri, ranges, scanLimit, null);
-                    ++ri;
-                }
-            }
         }
 
         pending.atIndex = checkpointIndex;
@@ -365,17 +389,6 @@ public class SearchableRangeListBuilder
                 scanDistance = extendedScanDistance;
         }
         return scanDistance;
-    }
-
-    void init(Range[] ranges, int goalScanDistance)
-    {
-        // we write checkpoints at least goalScanDistanceAndMinCheckpointSpan apart
-        IntBuffers cachedInts = cachedInts();
-        // ask for int buffers in descending order of size
-        this.lists = cachedInts.getInts(ranges.length); // this one might need to grow
-        // +2 to round-up each division, and +2 to account for the final entry (which might require an empty scan distance header)
-        this.headers = cachedInts.getInts(((ranges.length / goalScanDistance) * 5) / 4 + 4);
-        this.bounds = cachedInts.getInts(ranges.length / goalScanDistance + 1);
     }
 
     int writeList(PendingCheckpoint pending)
@@ -734,9 +747,9 @@ public class SearchableRangeListBuilder
      * This collection may be filtered before serialization, but every member will be visited either by scanning
      * or visiting the checkpoint list
      * TODO (low priority, efficiency): save garbage by using an insertion-sorted array for collections where
-     *  this is sufficient later, introduce a mutable b-tree supporting object recycling we would also like
+     *  this is sufficient. later, introduce a mutable b-tree supporting object recycling. we would also like
      *  to use a collection that permits us to insert and return a finger into the tree so we can find the
-     *  successor as part of insertion, and that permits cheaper first() calls
+     *  successor as part of insertion, and that permits constant-time first() calls
      */
     static class TenuredSet extends TreeSet<Tenured>
     {
@@ -838,11 +851,23 @@ public class SearchableRangeListBuilder
             {
                 Tenured removed = pollFirst();
 
+                // if removed.next == null, this is not referenced by a link
+                // if removed.next == removed, it is referenced by a link but does not modify the link on removal
                 if (removed.next != null && removed.next != removed)
                 {
-                    // this is the nominated member of a link's chain that invalidates the link and reactivates its members
-                    // for insertion into a new checkpoint, so we need to clear their status as members of the earlier
-                    // link chain and remove the link's marker
+                    // this is a member of a link's chain, which may serve one of two purposes:
+                    // 1) it may be the entry nominated to invalidate the link, due to the link
+                    //    membership shrinking below the required threshold; in which case we
+                    //    must clear the chain to reactivate its members for insertion into the
+                    //    next checkpoint, and remove the chain link itself
+                    // 2) it may be nominated as an entry to update the chain link info, to make
+                    //    it more succinct: if every entry of the chain remains active, and there
+                    //    are *many* entries then we need two integers to represent the chain, but
+                    //    as soon as any entry is invalid we can rely on this entry to terminate
+                    //    iteration, so we update the bookkeeping on the first entry we remove in
+                    //    this case
+
+                    // first clear the chain starting at the removed entry
                     Tenured prev = removed, next = removed.next;
                     while (next.next != null)
                     {
@@ -853,6 +878,7 @@ public class SearchableRangeListBuilder
                     Invariants.checkState(next.index < 0);
                     if (prev.end == next.end)
                     {
+                        // if this is the last entry in the link, the link is expired and should be removed/reused
                         remove(next);
                         if (pendingReuseTail == null)
                             pendingReuseTail = next;
@@ -861,19 +887,19 @@ public class SearchableRangeListBuilder
                     }
                     else if (next.linkLength < 0)
                     {
+                        // otherwise, flag the link as safely consumed without knowing the length
                         next.linkLength = next.linkLength & Integer.MAX_VALUE;
                     }
                 }
 
-                if (removed.index >= 0)
-                {
-                    --directCount;
-                    --minSpan;
-                    if (pendingReuseTail == null)
-                        pendingReuseTail = removed;
-                    removed.next = pendingReuse;
-                    pendingReuse = removed;
-                }
+                // this was not a link reference; update our bookkeeping and save it for reuse
+                Invariants.checkState(removed.index >= 0);
+                --directCount;
+                --minSpan;
+                if (pendingReuseTail == null)
+                    pendingReuseTail = removed;
+                removed.next = pendingReuse;
+                pendingReuse = removed;
             }
         }
 
@@ -911,7 +937,8 @@ public class SearchableRangeListBuilder
         int count;
 
         Tenured[] contents = new Tenured[10];
-        int openDirectCount, firstOpenDirect;
+
+        int openDirectCount, firstOpenDirect, openIndirectCount;
         boolean hasClosedDirect;
 
         int count()
@@ -936,14 +963,19 @@ public class SearchableRangeListBuilder
             count = 0;
         }
 
+        /**
+         * Remove pending entries that will be scanned by the scanDistance, and update
+         * our bookkeeping for creating links
+         */
         int filter(int scanDistance, int lastIndex)
         {
             int matchCountModifier = 0;
             int maxi = count;
             count = 0;
             openDirectCount = 0;
+            openIndirectCount = 0;
             firstOpenDirect = -1;
-            hasClosedDirect = false;
+//            lastClosedDirect = -1;
 
             for (int i = 0; i < maxi ; ++i)
             {
@@ -970,6 +1002,8 @@ public class SearchableRangeListBuilder
                 {
                     // note: we over count here, as we count pointers within the chain
                     matchCountModifier += (t.linkLength & Integer.MAX_VALUE) - 1; // (subtract 1 to discount the pointer)
+                    if (t.lastIndex > lastIndex)
+                        ++openIndirectCount;
                 }
 
                 if (i == count) ++count;
@@ -979,10 +1013,13 @@ public class SearchableRangeListBuilder
             return count + matchCountModifier;
         }
 
-        // must have at least two items, and at least as many direct records as indirect
+        /**
+         * Setup a link for referencing this chain later, if permitted.
+         * Must have at least two items, and at least as many direct records as indirect
+         */
         void setupLinkChain(TenuredSet tenured, int startIndex, int endIndex)
         {
-            int minSizeToReference = Math.max(MIN_INDIRECT_LINK_LENGTH, (openDirectCount - count));
+            int minSizeToReference = openIndirectCount + MIN_INDIRECT_LINK_LENGTH;
             if (openDirectCount >= minSizeToReference)
             {
                 int i = firstOpenDirect;
@@ -993,8 +1030,7 @@ public class SearchableRangeListBuilder
                     Tenured e = get(i++);
                     if (e.index < 0)
                     {
-                        if (minSizeToReference > MIN_INDIRECT_LINK_LENGTH)
-                            --minSizeToReference;
+                        --minSizeToReference;
                         continue;
                     }
 
@@ -1019,7 +1055,7 @@ public class SearchableRangeListBuilder
                 int length = endIndex - startIndex;
                 Tenured chainEntry = tenured.addLinkEntry(prev.end, BIT31 | startIndex, prev.lastIndex, length);
                 prev.next = chainEntry;
-                if (!hasClosedDirect && (startIndex > 0xfffff || (length > 0xff)))
+                if (hasClosedDirect && (startIndex > 0xfffff || (length > 0xff)))
                 {
                     // TODO (expected, testing): make sure this is tested, as not a common code path (may never be executed in normal operation)
                     // we have no closed ranges so iteration needs to know the end bound, but we cannot encode our bounds cheaply
