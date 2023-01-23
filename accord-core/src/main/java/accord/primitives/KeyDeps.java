@@ -418,6 +418,7 @@ public class KeyDeps implements Iterable<Map.Entry<Key, TxnId>>
         int startIndex = keys.indexOf(range.start());
         if (startIndex < 0) startIndex = -1 - startIndex;
         else if (!range.startInclusive()) ++startIndex;
+
         int endIndex = keys.indexOf(range.end());
         if (endIndex < 0) endIndex = -1 - endIndex;
         else if (range.endInclusive()) ++endIndex;
@@ -431,38 +432,32 @@ public class KeyDeps implements Iterable<Map.Entry<Key, TxnId>>
         for (int i = startIndex ; i < endIndex ; ++i)
         {
             int ri = startOffset(i), re = endOffset(i);
-            if (ri == re) continue;
-            if (count == 0)
-            {
-                count = re - ri;
-                System.arraycopy(keysToTxnIds, ri, scratch, 0, count);
-            }
-            else
-            {
-                if (count == maxLength)
-                    break;
+            if (ri == re)
+                continue;
 
-                System.arraycopy(scratch, 0, scratch, maxLength - count, count);
-                int li = maxLength - count, le = maxLength;
-                count = 0;
-                while (li < le && ri < re)
+            System.arraycopy(scratch, 0, scratch, maxLength - count, count);
+            int li = maxLength - count, le = maxLength;
+            count = 0;
+            while (li < le && ri < re)
+            {
+                int c = scratch[li] - keysToTxnIds[ri];
+                if (c <= 0)
                 {
-                    int c = keysToTxnIds[ri] - scratch[li];
-                    if (c <= 0)
-                    {
-                        scratch[count++] = scratch[li++];
-                        ri += c == 0 ? 1 : 0;
-                    }
-                    else
-                    {
-                        scratch[count++] = keysToTxnIds[ri++];
-                    }
-                }
-                while (li < le)
                     scratch[count++] = scratch[li++];
-                while (ri < re)
+                    if (c == 0) ++ri;
+                }
+                else
+                {
                     scratch[count++] = keysToTxnIds[ri++];
+                }
             }
+            while (li < le)
+                scratch[count++] = scratch[li++];
+            while (ri < re)
+                scratch[count++] = keysToTxnIds[ri++];
+
+            if (count == maxLength)
+                break;
         }
 
         int[] ids = cachedInts().completeAndDiscard(scratch, count);
